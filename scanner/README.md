@@ -61,6 +61,13 @@ backend).
 TradingView results are cached for 5 minutes (`NSE_SCANNER_CACHE_SECONDS`);
 "Fresh data" on the page bypasses the cache.
 
+## Password
+
+Set `NSE_SCANNER_PASSWORD` to make the app ask for a password (HTTP Basic: any
+user name, that password) on everything except `/api/health`, which hosts use
+as a health check. Always set it when the app is on the internet. Hosting
+steps are in the [top-level README](../README.md#host-it-online-render-free).
+
 ## Offline mode
 
 For demos, or where `scanner.tradingview.com` is blocked, point the backend

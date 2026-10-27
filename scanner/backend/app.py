@@ -2,17 +2,23 @@
 
     uvicorn app:app --port 8000          (from scanner/backend)
 
+Set NSE_SCANNER_PASSWORD to require a password (HTTP Basic, any user name)
+for everything except /api/health; use it whenever the app is on the internet.
+
 Fetches NSE stocks from TradingView, scores them with the nse-swing skill's
 score.py (the single source of the scoring rules) and serves the React page
 from ../frontend/dist when it has been built. Never places orders.
 """
+import base64
 import os
+import secrets
 import sys
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,6 +47,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_password(request: Request, call_next):
+    """HTTP Basic auth when NSE_SCANNER_PASSWORD is set; the health check stays open for the host."""
+    password = os.environ.get("NSE_SCANNER_PASSWORD", "")
+    if not password or request.url.path == "/api/health":
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
+        try:
+            _, _, given = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            given = ""
+        if secrets.compare_digest(given.encode(), password.encode()):
+            return await call_next(request)
+    return PlainTextResponse("Password required.", status_code=401,
+                             headers={"WWW-Authenticate": 'Basic realm="NSE Swing Scanner"'})
 
 
 class ScanRequest(BaseModel):
