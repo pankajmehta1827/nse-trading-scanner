@@ -1,0 +1,11 @@
+# Render Blueprint: Dashboard > New > Blueprint > pick this repository.
+services:
+  - type: web
+    name: nse-trading-scanner
+    runtime: docker
+    plan: free
+    region: singapore          # closest Render region to India
+    healthCheckPath: /api/health
+    envVars:
+      - key: NSE_SCANNER_PASSWORD
+        sync: false            # Render asks you to type it during setup; it is never stored in git

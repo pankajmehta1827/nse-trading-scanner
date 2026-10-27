@@ -148,5 +148,37 @@ class Offline(Base):
         self.assertIn("CNX500", ids)
 
 
+class Password(Base):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, {"NSE_SCANNER_PASSWORD": "s3cret", "NSE_SCANNER_OFFLINE": FIXTURE})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_open_without_password_env(self):
+        with mock.patch.dict(os.environ, {"NSE_SCANNER_PASSWORD": ""}):
+            self.assertEqual(self.client.get("/api/universes").status_code, 200)
+
+    def test_blocks_without_credentials(self):
+        r = self.client.get("/api/universes")
+        self.assertEqual(r.status_code, 401)
+        self.assertIn("Basic", r.headers["www-authenticate"])
+
+    def test_wrong_password(self):
+        self.assertEqual(self.client.get("/api/universes", auth=("me", "nope")).status_code, 401)
+
+    def test_right_password_any_user(self):
+        self.assertEqual(self.client.get("/api/universes", auth=("anyone", "s3cret")).status_code, 200)
+        r = self.client.post("/api/scan", json={"min_score": 0}, auth=("me", "s3cret"))
+        self.assertEqual(r.status_code, 200)
+
+    def test_health_stays_open(self):
+        self.assertEqual(self.client.get("/api/health").status_code, 200)
+
+    def test_garbage_header(self):
+        r = self.client.get("/api/universes", headers={"Authorization": "Basic !!!notbase64"})
+        self.assertEqual(r.status_code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
