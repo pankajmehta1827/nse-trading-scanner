@@ -28,6 +28,11 @@ headlines, a chart link, near misses and CSV export. It never places orders.
 
 ## Run it (Windows)
 
+The easy way: double-click `start.bat` in the repository root (see the
+[top-level README](../README.md#run-it-on-your-computer-windows)). It runs
+[`launch.py`](launch.py), which does the steps below for you and skips the
+ones already done. By hand:
+
 ```bat
 cd scanner\backend
 python -m venv .venv
