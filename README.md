@@ -9,21 +9,28 @@ and positional trades. Moved here from NovaRagAgent, where it did not belong.
 | [`.claude/skills/nse-swing/`](.claude/skills/nse-swing/SKILL.md) | The `/nse-swing` Claude Code skill. Its `score.py` holds the scoring rules; the web app imports it, so the two always agree. |
 | [`trader/`](trader/README.md) | The third-party Day Trader skill pack (US stocks only, MIT, from Jakeschincariol/day-trader-skill), kept for reference. |
 
-## Quick start (Windows)
+## Run it on your computer (Windows)
 
-```bat
-cd scanner\backend
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-cd ..\frontend
-npm install
-npm run build
-cd ..\backend
-.venv\Scripts\uvicorn app:app --port 8000
-```
+1. **Get the code.** Either
+   - on GitHub: **Code → Download ZIP**, then right-click the ZIP → **Extract All**, or
+   - with Git: `git clone https://github.com/pankajmehta1827/nse-trading-scanner.git`
+2. **Double-click `start.bat`** in the folder.
+   - If Python or Node.js is missing, it offers to install it. Say **Y**, then
+     double-click `start.bat` again when it says so.
+   - The first start sets everything up (a few minutes). Later starts take seconds.
+3. Your browser opens the scanner. Press **Run scan**.
 
-Open http://localhost:8000 and press **Run scan**. Full details, the API and
-offline mode are in [`scanner/README.md`](scanner/README.md).
+Keep the black window open while you use the scanner; closing it stops the app.
+
+**To update** after changes: double-click `update.bat` if you used Git, or
+download the ZIP again. The page rebuilds itself when its code has changed.
+
+macOS / Linux: `python3 scanner/launch.py`. Options: `--port 8001`,
+`--no-browser`, `--rebuild`. Full details, the API and offline mode are in
+[`scanner/README.md`](scanner/README.md).
+
+If something goes wrong, the window says what and how to fix it; it stays open
+so you can read it or take a screenshot.
 
 ## Host it online (Render, free)
 
