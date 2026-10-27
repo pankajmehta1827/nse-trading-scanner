@@ -140,3 +140,5 @@ footer { margin-top: 24px; line-height: 1.5; max-width: 90ch; }
   /* keep an opened row's detail on screen while the wide table scrolls sideways */
   .detail { position: sticky; left: 8px; width: calc(100vw - 50px); }
 }
+
+.stale { margin: 0 0 16px; }

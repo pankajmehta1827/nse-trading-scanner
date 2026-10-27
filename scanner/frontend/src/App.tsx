@@ -108,10 +108,15 @@ export default function App() {
         </div>
       )}
 
-      {loading && !result && <div className="card intro muted">Fetching ~900 NSE stocks from TradingView…</div>}
+      {loading && !result && (
+        <div className="card intro muted">
+          Fetching NSE stocks from TradingView… If TradingView is busy this can take up to a minute while the app retries.
+        </div>
+      )}
 
       {result && (
         <div className={loading ? "dim" : ""}>
+          {result.stale_note && <p className="warn stale">{result.stale_note} Press Run scan again in a minute or two for fresh data.</p>}
           <Regime result={result} />
           <Stats result={result} />
           <div className="table-head">

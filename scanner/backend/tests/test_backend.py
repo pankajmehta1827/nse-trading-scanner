@@ -148,6 +148,115 @@ class Offline(Base):
         self.assertIn("CNX500", ids)
 
 
+def http_error(code, retry_after=None):
+    import email.message
+    import urllib.error
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return urllib.error.HTTPError("https://scanner.tradingview.com/india/scan", code, "Too Many Requests", headers, None)
+
+
+URL = "https://scanner.tradingview.com/india/scan"
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def read(self):
+        return json.dumps(self.payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class RateLimits(Base):
+    """TradingView answering 429 Too Many Requests, as seen from Render."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("NSE_SCANNER_OFFLINE", None)
+        self.sleeps = []
+        for target, attr in ((tv.time, "sleep"),):
+            p = mock.patch.object(target, attr, side_effect=lambda s: self.sleeps.append(s))
+            p.start()
+            self.addCleanup(p.stop)
+        with open(FIXTURE) as f:
+            self.rows = json.load(f)["data"]
+
+    def urlopen(self, outcomes):
+        """Each call pops the next outcome: an exception to raise or a payload to return."""
+        calls = []
+
+        def fake(req, timeout=None):
+            calls.append(json.loads(req.data))
+            out = outcomes.pop(0) if outcomes else {"data": []}
+            if isinstance(out, Exception):
+                raise out
+            return FakeResponse(out)
+        p = mock.patch.object(tv.urllib.request, "urlopen", side_effect=fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return calls
+
+    def test_retries_then_succeeds(self):
+        payload = raw_payload(self.rows, tv.COLUMNS)
+        calls = self.urlopen([http_error(429), http_error(429), payload])
+        self.assertEqual(len(tv._post(tv.SCAN_URL.format(market="india"), {"range": [0, 1]})["data"]), len(self.rows))
+        self.assertEqual(len(calls), 3)
+        self.assertIn(2, self.sleeps)        # first back-off
+        self.assertIn(5, self.sleeps)        # second back-off
+
+    def test_honours_retry_after_but_caps_it(self):
+        self.urlopen([http_error(429, retry_after=7), http_error(429, retry_after=999), {"data": []}])
+        tv._post(URL, {})
+        self.assertIn(7.0, self.sleeps)
+        self.assertIn(float(tv.MAX_RETRY_WAIT), self.sleeps)
+        self.assertNotIn(999.0, self.sleeps)
+
+    def test_gives_up_with_rate_limited(self):
+        calls = self.urlopen([http_error(429)] * 10)
+        with self.assertRaises(tv.RateLimited):
+            tv._post(URL, {})
+        self.assertEqual(len(calls), len(tv.RETRY_WAITS) + 1)
+
+    def test_other_http_errors_not_retried(self):
+        calls = self.urlopen([http_error(403)] * 3)
+        with self.assertRaises(tv.TradingViewError) as ctx:
+            tv._post(URL, {})
+        self.assertNotIsInstance(ctx.exception, tv.RateLimited)
+        self.assertEqual(len(calls), 1)
+
+    def test_scan_rate_limited_without_cache_is_friendly_503(self):
+        self.urlopen([http_error(429)] * 40)
+        r = self.client.post("/api/scan", json={"universe": "NIFTY"})
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("Wait a minute", r.json()["detail"])
+
+    def test_scan_falls_back_to_last_good_data(self):
+        outcomes = [raw_payload(self.rows, tv.COLUMNS), {"data": []}, {"data": []}]
+        self.urlopen(outcomes)                       # page 1, page 2, regime
+        ok = self.client.post("/api/scan", json={"min_score": 0}).json()
+        self.assertIsNone(ok["stale_note"])
+        outcomes.extend([http_error(429)] * 40)      # TradingView now refuses everything
+        r = self.client.post("/api/scan", json={"min_score": 0, "refresh": True})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("last good scan", body["stale_note"])
+        self.assertEqual(body["picks"][0]["symbol"], "GOODCO")
+
+    def test_min_gap_between_requests(self):
+        self.urlopen([{"data": []}, {"data": []}])
+        tv._last_call[0] = 0.0
+        tv._post(URL, {})
+        tv._post(URL, {})
+        self.assertTrue(any(0 < s <= tv.MIN_GAP for s in self.sleeps))
+
+
 class Password(Base):
     def setUp(self):
         super().setUp()

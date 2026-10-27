@@ -13,6 +13,8 @@ import base64
 import os
 import secrets
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -101,25 +103,52 @@ def regime_summary(raw):
     return {"status": status, "risk_off": risk_off, "indices": raw, "note": note}
 
 
-def get_regime(refresh=False):
-    hit = None if refresh else CACHE.get("regime")
-    if not hit:
+FETCH_LOCK = threading.Lock()   # one TradingView fetch at a time; waiting scans reuse its result
+RATE_LIMITED_MSG = ("TradingView is limiting requests from this server right now. "
+                    "Wait a minute or two, then press Run scan again.")
+
+
+def age_text(ts):
+    mins = int((time.time() - ts) // 60)
+    return "less than a minute" if mins < 1 else ("1 minute" if mins == 1 else "%d minutes" % mins)
+
+
+def cached(key, fetch, refresh):
+    """(value, fetched_at, stale_note): fresh from cache, else fetched, else the last good copy."""
+    hit = None if refresh else CACHE.get(key)
+    if hit:
+        return hit[1], iso(hit[0]), None
+    with FETCH_LOCK:
+        hit = None if refresh else CACHE.get(key)   # another request may have fetched it meanwhile
+        if hit:
+            return hit[1], iso(hit[0]), None
         try:
-            hit = CACHE.put("regime", regime_summary(tv.fetch_regime()))
+            hit = CACHE.put(key, fetch())
+            return hit[1], iso(hit[0]), None
         except tv.TradingViewError as e:
-            return dict(regime_summary({}), note="Index data unavailable (%s); using the normal cutoff." % e), None
-    return hit[1], iso(hit[0])
+            old = CACHE.last(key)
+            if old:
+                why = "TradingView is limiting requests" if isinstance(e, tv.RateLimited) else "TradingView could not be reached"
+                return old[1], iso(old[0]), "%s, so this is the last good scan, from %s ago." % (why, age_text(old[0]))
+            raise
+
+
+def get_regime(refresh=False):
+    try:
+        data, fetched_at, _ = cached("regime", lambda: regime_summary(tv.fetch_regime()), refresh)
+        return data, fetched_at
+    except tv.TradingViewError as e:
+        return dict(regime_summary({}), note="Index data unavailable (%s); using the normal cutoff." % e), None
 
 
 def get_rows(universe, refresh=False):
     key = "rows:" + ",".join("%d-%d" % p for p in tv.PAGES.get(universe, tv.PAGES["CNX500"]))
-    hit = None if refresh else CACHE.get(key)
-    if not hit:
-        try:
-            hit = CACHE.put(key, tv.fetch_stocks(universe))
-        except tv.TradingViewError as e:
-            raise HTTPException(502, str(e))
-    return hit[1], iso(hit[0])
+    try:
+        return cached(key, lambda: tv.fetch_stocks(universe), refresh)
+    except tv.RateLimited:
+        raise HTTPException(503, RATE_LIMITED_MSG, headers={"Retry-After": "60"})
+    except tv.TradingViewError as e:
+        raise HTTPException(502, str(e))
 
 
 @app.get("/api/health")
@@ -142,7 +171,7 @@ def regime(refresh: bool = False):
 def scan(req: ScanRequest):
     if req.universe not in UNIVERSES:
         raise HTTPException(400, "Unknown universe %r. Use one of: %s" % (req.universe, ", ".join(UNIVERSES)))
-    rows, fetched_at = get_rows(req.universe, req.refresh)
+    rows, fetched_at, stale_note = get_rows(req.universe, req.refresh)
     reg, _ = get_regime(req.refresh)
     risk_off = {"auto": reg["risk_off"], "on": False, "off": True}[req.risk_mode]
 
@@ -161,6 +190,7 @@ def scan(req: ScanRequest):
         sectors=sorted(({"sector": k, "count": v} for k, v in sectors.items()), key=lambda s: -s["count"]),
         regime=reg,
         fetched_at=fetched_at,
+        stale_note=stale_note,
         mode="offline" if tv.is_offline() else "live",
     )
     return res

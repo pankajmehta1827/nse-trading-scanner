@@ -11,7 +11,9 @@ to a JSON object {"NSE:CNX500": {"close": ..., "sma50": ..., ...}, ...}.
 """
 import json
 import os
+import threading
 import time
+import urllib.error
 import urllib.request
 
 SCAN_URL = "https://scanner.tradingview.com/{market}/scan"
@@ -23,6 +25,11 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (nse-scanner)",
 }
 TIMEOUT = 30
+MIN_GAP = 1.5          # seconds between screener requests from this server
+RETRY_WAITS = (2, 5, 10)  # back-off before each retry when TradingView says "too many requests"
+MAX_RETRY_WAIT = 15    # never honour a longer Retry-After than this inside one request
+_lock = threading.Lock()
+_last_call = [0.0]
 
 # Raw TradingView column names; norm_key() turns them into the keys score.py reads.
 COLUMNS = [
@@ -54,6 +61,10 @@ class TradingViewError(RuntimeError):
     pass
 
 
+class RateLimited(TradingViewError):
+    """TradingView kept answering 429 Too Many Requests after our retries."""
+
+
 def norm_key(k):
     return k.lower().replace(".", "_")
 
@@ -69,13 +80,34 @@ def rows_from_scan(payload, columns):
     return rows
 
 
-def _post(url, body):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=HEADERS, method="POST")
+def _retry_after(err, default):
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            return json.loads(resp.read().decode())
-    except Exception as e:  # network, HTTP or JSON errors all mean "no data"
-        raise TradingViewError("TradingView screener request failed: %s" % e) from e
+        return min(max(float(err.headers.get("Retry-After")), 1.0), MAX_RETRY_WAIT)
+    except (TypeError, ValueError, AttributeError):
+        return default
+
+
+def _post(url, body):
+    """POST to the screener, one request at a time, retrying 429 / 503 with back-off."""
+    data = json.dumps(body).encode()
+    with _lock:
+        for attempt in range(len(RETRY_WAITS) + 1):
+            gap = MIN_GAP - (time.monotonic() - _last_call[0])
+            if gap > 0:
+                time.sleep(gap)
+            _last_call[0] = time.monotonic()
+            req = urllib.request.Request(url, data=data, headers=HEADERS, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                    return json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 503):
+                    raise TradingViewError("TradingView screener request failed: HTTP %s %s" % (e.code, e.reason)) from e
+                if attempt == len(RETRY_WAITS):
+                    raise RateLimited("TradingView is limiting requests from this server (HTTP %s)" % e.code) from e
+                time.sleep(_retry_after(e, RETRY_WAITS[attempt]))
+            except Exception as e:  # network or JSON errors mean "no data"
+                raise TradingViewError("TradingView screener request failed: %s" % e) from e
 
 
 def offline_files():
@@ -157,6 +189,10 @@ class TTLCache:
         if hit and time.time() - hit[0] < self.seconds:
             return hit
         return None
+
+    def last(self, key):
+        """The newest value however old, or None: a fallback when a refresh fails."""
+        return self._store.get(key)
 
     def put(self, key, value):
         self._store[key] = (time.time(), value)
