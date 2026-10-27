@@ -70,6 +70,7 @@ export interface ScanResult {
   sectors: { sector: string; count: number }[];
   regime: Regime;
   fetched_at: string;
+  stale_note: string | null;
   mode: "live" | "offline";
 }
 
